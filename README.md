@@ -1,115 +1,142 @@
-# Dynamic Soccer Win Probability
+# Dynamic Win Probability — La Liga
 
-This project builds an in-game soccer win probability model from StatsBomb event data and Club Elo ratings. The model works at possession level: at each game state, it predicts the remaining goals for the home and away team, then converts those predicted goal rates into home-win, draw, and away-win probabilities with a Poisson outcome layer.
+> Predicting in-game win probabilities from possession-level event sequences using deep learning, inspired by [Robberechts et al. (KDD 2021)](https://arxiv.org/abs/2012.07669).
 
-The target design follows the idea used in Robberechts, Van Haaren, and Davis (KDD 2021): predict future scoring distributions first, then derive win/draw/loss probabilities.
+---
+
+## What this project does
+
+Most win probability models update once per goal. This one updates **every possession** — using the full sequence of passes, carries, shots, and dribbles within each possession to predict how many goals each team will score from that moment forward. Those remaining-goal predictions are then converted into home win / draw / away win probabilities using a Poisson model.
+
+Trained and evaluated on **793 La Liga matches** from StatsBomb open data, enriched with Club Elo ratings and expected goals (xG). The match-level train/val/test split (70/15/15) ensures no possession from the same match appears in both train and test, preventing data leakage from game state continuity.
+
+---
 
 ## Results
 
-Current cleaned experiment:
+| Metric | RF Baseline | LSTM | GRU |
+|---|---|---|---|
+| Remaining-goals MAE | 0.7677 | 0.6639 | **0.6552** |
+| RPS ↓ | 0.1377 | 0.1075 | **0.1056** |
+| Multiclass Brier ↓ | 0.4488 | 0.3592 | **0.3539** |
 
-| Metric | LSTM | Random Forest Baseline |
-|---|---:|---:|
-| Remaining-goals MAE | 0.6522 | 0.7692 |
-| Ranked Probability Score | 0.1069 | 0.1382 |
-| Multiclass Brier Score | 0.3563 | 0.4503 |
+Both LSTM and GRU beat the baseline by **~23% on RPS**. GRU edges LSTM on all three primary metrics — fewer parameters, slightly less overfitting on a dataset of this size.
 
-Target validation after cleaning:
+### Calibration (ECE — lower is better)
 
-| Check | Value |
-|---|---:|
-| Matches retained | 793 |
-| Home target consistency | 1.000000 |
-| Away target consistency | 1.000000 |
-| Negative home targets | 0 |
-| Negative away targets | 0 |
+| Outcome | LSTM | GRU |
+|---|---|---|
+| Home win | 0.0319 | 0.0398 |
+| Draw | 0.0484 | 0.0456 |
+| Away win | 0.0263 | 0.0330 |
 
-## Project Structure
+All ECE values sit below 0.05 — well-calibrated across all three outcomes. Draw calibration is the weakest for both models, which is expected: the Poisson independence assumption tends to underestimate draw probability in close matches. A Dixon-Coles correction would partially address this and is a natural direction for future work.
 
-```text
+### What the models actually learned
+
+**Goal discrimination** — when a home goal is genuinely still coming, both models predict 2.2× more than when there isn't one. For away goals the ratio is 1.8×. Home goals are discriminated more strongly, reflecting La Liga's real home advantage in the data.
+
+**Time decay** — predicted remaining goals drop from ~1.46 at kickoff to ~0.24 in the 85th minute (6× reduction), closely tracking actual remaining goals throughout. Both models have genuinely learned that time matters — not just that more goals happen early, but by how much and at what rate.
+
+**LSTM vs GRU in practice** — LSTM produces smoother probability curves, better suited for full-time outcome prediction. GRU is more reactive to in-game events, with visible probability shifts around goals and periods of sustained pressure — better suited for live match tracking where capturing momentum matters. Both models show slight overconfidence in the opening 20 minutes before enough match context has accumulated, a known behaviour of sequence models operating with limited early input.
+
+### Win probability — sample match
+
+| LSTM | GRU |
+|---|---|
+| ![LSTM win probability](results/win_prob_lstm_9602.png) | ![GRU win probability](results/win_prob_gru_9602.png) |
+
+### Time decay — predicted vs true remaining goals
+
+![Time decay](results/time_decay.png)
+
+---
+
+## Project structure
+
+```
 dl-win-probability/
-├── README.md
-├── requirements.txt
-├── .gitignore
+├── notebooks/
+│   ├── 01_data_collection.ipynb     # StatsBomb + Elo merge
+│   ├── 02_preprocessing.ipynb       # Feature engineering, padding, scaling, splits
+│   ├── 03_models.ipynb              # RF baseline, LSTM, GRU training
+│   └── 04_evaluation.ipynb          # Calibration, comparison, win probability plots
 ├── src/
-│   ├── features.py
-│   ├── artifacts.py
-│   ├── metrics.py
-│   ├── models.py
-│   └── viz.py
+│   ├── features.py                  # engineer_features_future_goals, poisson_wdl_from_lambdas
+│   ├── metrics.py                   # ranked_probability_score, multiclass_brier_score, ece
+│   ├── models.py                    # build_lstm, build_gru
+│   └── viz.py                       # plot_calibration, plot_combined_win_probability_with_goals
 ├── data/
-│   ├── .gitkeep
-│   └── split_ids.pkl
-├── models/
-│   └── scaler.pkl
-├── results/
-│   └── all_predictions.pkl
-└── notebooks/
-    ├── 01_data_collection.ipynb
-    ├── 02_preprocessing.ipynb
-    ├── 03_models.ipynb
-    └── 04_evaluation.ipynb
+│   ├── raw/                         # StatsBomb JSONs, EloRatings.csv (not tracked in git)
+│   └── processed/                   # Generated by notebook 02 (not tracked in git)
+├── models/                          # Saved .keras models (not tracked in git)
+├── results/                         # Predictions and plots (not tracked in git)
+└── requirements.txt
 ```
 
-## Method
+Notebooks are designed to run in order. Each one saves its outputs to disk so the next one can load them without rerunning anything.
 
-1. Load StatsBomb match and event data.
-2. Merge historical Club Elo ratings using backward date matching.
-3. Aggregate event data into possession-level features.
-4. Build supervised targets:
-   - `future_home_goals = final_home_score - current_home_score`
-   - `future_away_goals = final_away_score - current_away_score`
-5. Validate target consistency against official final scores.
-6. Train an LSTM with Poisson loss to predict remaining home and away goals.
-7. Convert predicted remaining-goal means into home/draw/away probabilities.
-8. Evaluate with remaining-goals MAE, Ranked Probability Score, and multiclass Brier score.
+---
 
-## Data Cleaning Note
+## Quickstart
 
-Official final scores from match metadata are treated as authoritative. Matches where event-derived goal counts do not match official final scores are excluded before target construction, because inconsistent score reconstruction would produce incorrect supervised labels.
-
-## Baseline
-
-The baseline is a Random Forest regressor trained on simple game-state features:
-
-- match time
-- score difference
-- time remaining
-- Elo difference
-
-It predicts the same remaining-goals targets as the LSTM and uses the same Poisson probability conversion.
-
-## Reproducing
-
-Install dependencies:
-
+**1. Clone and install**
 ```bash
+git clone https://github.com/yourusername/dl-win-probability.git
+cd dl-win-probability
 pip install -r requirements.txt
 ```
 
-Run the notebooks in order:
+**2. Get the data**
 
-1. `notebooks/01_data_collection.ipynb`
-2. `notebooks/02_preprocessing.ipynb`
-3. `notebooks/03_models.ipynb`
-4. `notebooks/04_evaluation.ipynb`
-
-Raw StatsBomb event files and large Elo CSV files are not committed. Place them locally according to the paths used in the data collection notebook.
-
-## Next Improvements
-
-- Add chronological train/validation/test split for future-season generalization.
-- Add Elo ablation: train with and without Elo features.
-- Add calibration plots for home/draw/away probabilities.
-- Export `results/all_predictions.pkl` from the evaluation notebook.
-
-## Artifact Export
-
-After training/evaluation, save reproducibility artifacts with:
-
-```python
-from src.artifacts import save_split_ids, save_predictions
-
-save_split_ids("data/split_ids.pkl", train_ids, val_ids, test_ids)
-save_predictions("results/all_predictions.pkl", test_rows, probs, y_pred_goals)
+StatsBomb open data:
+```bash
+git clone https://github.com/statsbomb/open-data.git
 ```
+
+Copy the `matches/11/` and `events/` folders into `data/raw/`, along with `EloRatings.csv` from [Club Elo](http://clubelo.com/).
+
+**3. Run notebooks in order**
+```
+01_data_collection   → ~10 mins
+02_preprocessing     → ~5 mins
+03_models            → ~15 mins
+04_evaluation        → ~2 mins
+```
+
+---
+
+## Model architecture
+
+Both models share the same structure — only the recurrent layer changes.
+
+```
+Input (n_matches, 273 timesteps, 25 features)
+  → Masking (mask_value=0.0)
+  → LSTM / GRU (64 units, return_sequences=True)
+  → Dropout (0.2)
+  → Dense (32, relu)
+  → Dense (2, softplus)          ← predicts [future_home_goals, future_away_goals]
+```
+
+**Loss:** `tf.keras.losses.Poisson()` — correct for count-valued remaining-goal targets.  
+**Output activation:** `softplus` — ensures strictly positive Poisson rate estimates.  
+**Training:** Adam (lr=0.001), EarlyStopping (patience=5, restore_best_weights=True).
+
+Targets are converted to WDL probabilities at inference time by summing over remaining goal combinations under the Poisson distribution. The model is trained on La Liga only — generalisation to other leagues is an open question and a natural next step.
+
+---
+
+## Data
+
+| Item | Value |
+|---|---|
+| Source | StatsBomb open data (La Liga) |
+| Matches | 793 (868 raw, 75 dropped — score mismatch) |
+| Possessions | ~154,000 |
+| Raw events | ~3.1M |
+| Features | 25 per possession timestep |
+| Max sequence length | 273 possessions |
+| Train / Val / Test | 555 / 119 / 119 matches (70/15/15) |
+
+---
