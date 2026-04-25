@@ -1,6 +1,6 @@
 # Dynamic Win Probability — La Liga
 
-> Predicting in-game win probabilities from possession-level event sequences using deep learning, inspired by [Robberechts et al. (KDD 2021)](https://arxiv.org/abs/2012.07669).
+> Predicting in-game win probabilities from possession-level event sequences using deep learning.
 
 ---
 
