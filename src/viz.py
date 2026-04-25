@@ -8,7 +8,7 @@ from src.metrics import ece
 import matplotlib.gridspec as gridspec
 from sklearn.calibration import calibration_curve
 
-def plot_combined_win_probability_with_goals(match_id, test_rows, probs):
+def plot_combined_win_probability_with_goals(match_id, test_rows, probs, model_name):
     plot_df = test_rows.copy()
 
     plot_df["home_win_prob"] = probs[:, 0]
@@ -18,7 +18,7 @@ def plot_combined_win_probability_with_goals(match_id, test_rows, probs):
     m = plot_df[plot_df["match_id"] == match_id].sort_values("possession").copy()
 
     if m.empty:
-        print("Match not found in test_rows. Pick a match_id from test_rows.")
+        print("Match not found in test_rows.")
         return
 
     prob_cols = ["home_win_prob", "draw_prob", "away_win_prob"]
@@ -36,7 +36,7 @@ def plot_combined_win_probability_with_goals(match_id, test_rows, probs):
     final_home = int(m["final_home_score"].iloc[0])
     final_away = int(m["final_away_score"].iloc[0])
 
-    plt.figure(figsize=(15, 5))
+    plt.figure(figsize=(15,5))
 
     plt.stackplot(
         x,
@@ -48,7 +48,6 @@ def plot_combined_win_probability_with_goals(match_id, test_rows, probs):
         alpha=0.95
     )
 
-    # Detect goal possessions from score changes
     m["prev_home_score"] = m["home_score"].shift(1).fillna(0)
     m["prev_away_score"] = m["away_score"].shift(1).fillna(0)
 
@@ -61,15 +60,14 @@ def plot_combined_win_probability_with_goals(match_id, test_rows, probs):
         goal_x = m.index.get_loc(idx)
 
         if row["home_score"] > row["prev_home_score"]:
-            scorer = home_team
             score_label = f'{int(row["home_score"])}-{int(row["away_score"])}'
             color = "#b8860b"
         else:
-            scorer = away_team
             score_label = f'{int(row["home_score"])}-{int(row["away_score"])}'
             color = "#123c7c"
 
         plt.axvline(goal_x, color=color, linestyle="--", linewidth=1.5, alpha=0.85)
+
         plt.text(
             goal_x,
             103,
@@ -77,21 +75,28 @@ def plot_combined_win_probability_with_goals(match_id, test_rows, probs):
             ha="center",
             va="bottom",
             fontsize=9,
-            color=color,
-            rotation=0
+            color=color
         )
 
-    plt.ylim(0, 110)
+    plt.ylim(0,110)
     plt.ylabel("Probability")
     plt.xlabel("Possession index")
-    plt.yticks([0, 20, 40, 60, 80, 100], ["0%", "20%", "40%", "60%", "80%", "100%"])
+    plt.yticks([0,20,40,60,80,100], ["0%","20%","40%","60%","80%","100%"])
 
-    plt.title(f"Win Probability - {home_team} {final_home} - {final_away} {away_team}")
+    plt.title(
+        f"{model_name.upper()} Win Probability - "
+        f"{home_team} {final_home} - {final_away} {away_team}"
+    )
 
     plt.legend(loc="upper center", ncol=3, frameon=False)
     plt.grid(axis="y", alpha=0.25)
 
     plt.tight_layout()
+    plt.savefig(
+        f"../results/win_prob_{model_name.lower()}_{match_id}.png",
+        dpi=150,
+        bbox_inches="tight"
+    )
     plt.show()
 
 def plot_calibration(probs, outcomes, model_name='Model', n_bins=10):
